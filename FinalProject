@@ -1,0 +1,205 @@
+import csv
+import os
+import arcpy
+
+#define the workspace
+arcpy.env.workspace = r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat"
+
+#define the geodatabase 
+#geodatabase contains basemap DEM and shape files from public sources
+ingdb = r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb"
+
+#import csv (hazardous release data) - Davis
+releases = r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\Datasets\HazmatAccidents_392Project.csv"
+outgdb = r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb"
+arcpy.conversion.TableToTable(releases, outgdb, "HazmatTable")
+#delete rows - cleaning - select table by attribute
+arcpy.analysis.TableSelect(
+    in_table="HazmatTable",
+    out_table=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\ReleaseTable",
+    where_clause="Date IS NOT NULL"
+)
+
+#xy table to point - get release locations into point data - Janette
+output_feature_class = out_feature_class=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\HazmatTable_XYTableToPoint"
+input_coordinate_system = arcpy.SpatialReference(4326)
+output_coordinate_system = arcpy.SpatialReference(102004)
+arcpy.management.XYTableToPoint(
+    in_table="ReleaseTable",
+    out_feature_class=output_feature_class,
+    x_field="Long",
+    y_field="Lat",
+    z_field=None,
+    coordinate_system=input_coordinate_system
+)
+arcpy.management.Project(output_feature_class, "Accident_Locations", output_coordinate_system)
+
+#buffer tool - user input of buffer at release locations - Isabel
+# Setup our user input variables - 2 inputs - and buffer to size
+bufferOneSize_input = int(input("Please enter a buffer size (meters): "))
+arcpy.analysis.Buffer(in_features="Accident_Locations",
+    out_feature_class=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\BufferOne",
+    buffer_distance_or_field=bufferOneSize_input, 
+    line_side="FULL",
+    line_end_type="ROUND",
+    dissolve_option="ALL",
+    dissolve_field=None,
+    method="PLANAR"
+)
+
+bufferTwoSize_input = int(input("Please enter a second buffer size (meters): "))
+arcpy.analysis.Buffer(in_features="Accident_Locations",
+    out_feature_class=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\BufferTwo",
+    buffer_distance_or_field=bufferTwoSize_input, 
+    line_side="FULL",
+    line_end_type="ROUND",
+    dissolve_option="ALL",
+    dissolve_field=None,
+    method="PLANAR"
+)
+
+
+#intersect tool (surface water) - intersect of buffer layer and rivers & reservoirs - Alyssa
+#buffer rivers and reservoirs with setback (45.72 meters or 150 feet)
+setback = '45.72 meter'
+arcpy.analysis.Buffer("MajorRivers_dd83_new", "riverbuffer", setback)
+arcpy.analysis.Buffer("TWDB_SWP2012_Major_Reservoirs_new", "reservoirbuffer", setback)
+#merge rivers and reservoirs polygons to surface water layer
+arcpy.management.Merge(
+    inputs="riverbuffer;reservoirbuffer", 
+    output=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\SurfaceWaters", 
+    {field_mappings}, 
+    {add_source}, 
+    {field_match_mode})
+#intersect surface water with buffers
+arcpy.analysis.Intersect(
+    in_features="SurfaceWaters #;BufferOne #", 
+    out_feature_class=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\SW_BufferOne_Intersect", 
+    join_attributes="ALL", 
+    cluster_tolerance=None, 
+    output_type="INPUT")
+
+arcpy.analysis.Intersect(
+    in_features="SurfaceWaters #;BufferTwo #", 
+    out_feature_class=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\SW_BufferTwo_Intersect", 
+    join_attributes="ALL", 
+    cluster_tolerance=None, 
+    output_type="INPUT")
+
+#intersect tool - intersect of buffer layer and major and minor aquifers - Naomi
+#merge aquifers major and minor to groundwater layer
+arcpy.management.Merge(
+    inputs="Minor_Aquifers_new;NEW_major_aquifers_dd_new",
+    output=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\Aquifers_Combined"
+)
+
+#intersect buffer one input by user with groundwater
+arcpy.analysis.Intersect(
+    in_features="BufferOne #;Aquifers_Combined #",
+    out_feature_class=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\GroundWat_IntersectOne",
+    join_attributes="ALL",
+    cluster_tolerance=None,
+    output_type="INPUT"
+)
+
+#intersect buffer two input by user with groudwater
+arcpy.analysis.Intersect(
+    in_features="BufferTwo #;Aquifers_Combined #",
+    out_feature_class=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\GroundWat_IntersectTwo",
+    join_attributes="ALL",
+    cluster_tolerance=None,
+    output_type="INPUT"
+)
+
+#Water impact analysis: high risk area - create groundwater and surface water intersect for areas in each buffer (one and two) - Carla
+#intersect groundwater and surface water area of impact - Buffer One
+arcpy.analysis.Intersect(
+    in_features="GroundWat_IntersectOne #;SW_BufferOne_Intersect #",
+    out_feature_class=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\HighImpact_BuffOne",
+    join_attributes="ALL",
+    cluster_tolerance=None,
+    output_type="INPUT"
+)
+
+#intersect groundwater and surface water in areas of impact - Buffer Two
+arcpy.analysis.Intersect(
+    in_features="GroundWat_IntersectTwo #;SW_BufferTwo_Intersect #",
+    out_feature_class=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\HighImpact_BuffTwo",
+    join_attributes="ALL",
+    cluster_tolerance=None,
+    output_type="INPUT"
+)
+
+
+#intersect of land use types and percentage within buffers - Carla
+#clip land cover types w.in buffer
+clipInput = r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\Datasets\EcologicalMappingSystems_10mRaster\EcologicalMappingSystems_10mRaster.img"
+#clip raster to buffer one 
+arcpy.management.Clip(
+    in_raster=clipInput, 
+    rectangle="1267861.85238273 6870074.15862475 2094070.29659882 7921131.84254262", 
+    out_raster=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\LC_within_BufferOne",
+    in_template_dataset="BufferOne",
+    nodata_value="-1",
+    clipping_geometry="ClippingGeometry",
+    maintain_clipping_extent="MAINTAIN_EXTENT"
+)
+#add field for area of each land use type in buffer one
+arcpy.management.AddField(
+    in_table="LC_within_BufferOne",
+    field_name="Area",
+    field_type="FLOAT",
+    field_precision=None,
+    field_scale=None,
+    field_length=None,
+    field_alias="Area",
+    field_is_nullable="NULLABLE",
+    field_is_required="NON_REQUIRED",
+    field_domain=""
+)
+
+#calculate field for area of each land use type (by count) in buffer one
+arcpy.management.CalculateField(
+    in_table="LC_within_BufferOne",
+    field="Area",
+    expression="!Count! *(9.999925634047981*10.000000946891847)/1000000",
+    expression_type="PYTHON3",
+    code_block="",
+    field_type="TEXT",
+    enforce_domains="NO_ENFORCE_DOMAINS"
+)
+
+#clip raster to buffer two
+arcpy.management.Clip(
+    in_raster=clipInput, 
+    rectangle="1267861.85238273 6870074.15862475 2094070.29659882 7921131.84254262", 
+    out_raster=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\TX_Transport_Hazmat\TX_Transport_Hazmat.gdb\LC_within_BufferTwo",
+    in_template_dataset="BufferTwo",
+    nodata_value="-1",
+    clipping_geometry="ClippingGeometry",
+    maintain_clipping_extent="MAINTAIN_EXTENT"
+)
+arcpy.management.CalculateField(
+    in_table="LC_within_BufferTwo",
+    field="Area",
+    expression="!Count!*(9.999981169631123*9.999977964320502)/1000000",
+    expression_type="PYTHON3",
+    code_block="",
+    field_type="TEXT",
+    enforce_domains="NO_ENFORCE_DOMAINS"
+)
+
+#export table to csv for client use
+#export attribute table to csv (Buffer 1 Landcover)
+arcpy.conversion.ExportTable(
+    in_table="LC_within_BufferOne", 
+    out_table=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\Datasets\LC_BufferOne.csv"
+)
+#export attribute table to csv (Buffer 2 Landcover)
+arcpy.conversion.ExportTable(
+    in_table="LC_within_BufferTwo", 
+    out_table=r"C:\Users\cjcro\OneDrive\Documents\GEOG676\Project\Datasets\LC_BufferTwo.csv"
+)
+
+
+### <<<<<END OF CODE
